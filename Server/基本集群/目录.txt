@@ -1,0 +1,11 @@
+gate server
+game server
+world server
+logic server
+db server
+
+rpc call 
+name service
+
+actor
+

@@ -1,0 +1,6 @@
+一切均table
+
+class
+
+metatable
+
