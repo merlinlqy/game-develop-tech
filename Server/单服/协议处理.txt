@@ -1,0 +1,33 @@
+在解完封包以后，则需要对协议进行处理。
+
+无论使用那种协议（原始的struct，sproto，protobuffer），首先需要标识的是这是个什么封包。一般会采取OPCODE形式，由客户端，服务端双方程序约定，每个OPCODE对应的是那个协议。
+所以在协议部分，客户端和服务端也会存在版本问题。因此很多都会采用同一个代码子库方式，使协议一致。
+
+随着协议的增多，简单的OPCODE将会不在够用，因此可以在设计初期就可以初步设定两层协议，免得到时候再做重构的时候才来做这部分，导致影响开发效率。
+
+而proto buffer具有反射的能力，与上面其实在设计上没有本质区别。
+
+
+
+从程序设计部分，因为协议的多样性，一般会采取注册->分发的机制。
+首先有一个类似于ProtoManager的单例，该单例将会管理其整个协议。
+内部使用map来存储opcode和handler（callback）的映射
+提供接口和伪代码如下：
+RegisterProto(int opcode, void *handler)
+{
+    map[opcode] = handler
+}
+
+DistrubteMessage(char *buffer)
+{
+    opcode, message_body = split_message(buffer)
+    void *handler = map[opcode]
+    handler(buffer)
+}
+
+而handler的处理形如：
+handler(char *buffer)
+{
+    Message msg = unserilize(buffer)
+    msg.deal_message()
+}
