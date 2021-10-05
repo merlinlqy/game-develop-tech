@@ -1,0 +1,49 @@
+协程（纤程）是比线程更小粒度的一种上下文处理方式。
+
+这里会以C#为例子语言来解释。
+
+首先可以认为，协程是不是必须基于语言层面的，C++也能写出协程，只是看起来没那么漂亮而已（现在C++也支持协程）。
+
+协程也是有上下文的，但是会比线程更轻，而这个上下文会有语言的虚拟机来维护，使用方其实可以忽略这部分细节。
+
+
+C#对协程的处理首先是使用yield，简单来说就是生成一个迭代器（或者说一个函数包装，IEnumerator method），等真实使用的时候，才会做真实的调用。
+
+而协程（corountine）就是在此基础上的再进一步包装。
+StartCoroutine（IEnumerator method)
+
+简单例子：
+    void Start () {
+        Debug.Log("start1");
+        StartCoroutine(Test());
+        Debug.Log("start2");
+    }
+
+    IEnumerator Test()
+    {
+        Debug.Log("test1");
+        yield return StartCoroutine(DoSomething());
+        Debug.Log("test2");
+    }
+
+    IEnumerator DoSomething()
+    {
+        Debug.Log("load 1");
+        yield return null;
+        Debug.Log("load 2");
+    }
+
+
+执行结果：
+
+start1
+
+test1
+
+load1
+
+start2
+
+load2
+
+test2
