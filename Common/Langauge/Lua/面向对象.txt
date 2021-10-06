@@ -1,0 +1,166 @@
+lua原生是不支持面向对象的。
+因此lua的面向对象是指通过修改元表，达到类似面向对象的目的。
+
+面向对象主要是指实现类似继承，重载以及多态。
+
+
+
+目标：实现一个class函数，给lua添加面向对象的特性
+
+基础：和编译型的面向对象语言不同，在lua中不存在类的定义这样一个概念，不管是类的定义还是类的实例都需要通过lua table来模拟。我们实现的lua面向对象是prototype方式的，即类是一个lua table，这个table 定义了类实例的原型， 类的实例则是基于这个原型的另一个lua table。
+
+关键：实现Lua面向对象可以分解为类的定义和类的实例化两个问题。类的定义主要是实现继承，即怎么让子类拥有父类的方法集。类的实例化需要解决实例如何共享类的方法集，但独享自己的成员变量实例。
+
+方案：子类在定义时复制所有基类的方法，在实例化时将该类作为metatable的__index赋值给实例。这就是cocos2dx里面的lua class的实现。
+
+function class(classname, super)
+     local cls = {}
+     if super then --复制基类方法
+        cls = {}
+        for k,v in pairs(super) do cls[k] = v end
+        cls.super = super
+    else
+        cls = {ctor = function() end}
+    end
+
+    cls.__cname = classname
+    cls.__index = cls
+
+    function cls.new(...) --实例化
+        local instance = setmetatable({}, cls)
+        instance.class = cls
+        instance:ctor(...)
+        return instance
+    end
+    return cls
+end
+在这个实现方式中，所有子类的实例都共享了类原型中的方法。设想我们在类ClassA中定义了方法A，当调用实例的方法A时，lua解释器会先在实例table里面找方法A，因为我们没有在实例中添加方法，自然是找不到，于是解释器会通过实例的metatable里面的__index字段来找方法A，这个__index字段其实就是类原型，于是方法A被找到调用成功了。现在我们调用实例的方法B, B不是在ClassA中定义的，而是在ClassA的基类ClassB中定义的，由于ClassA在定义的时候已经把基类ClassB的方法全部复制了一遍，所以解释器仍然可以成功调用到B，继承实现了。
+
+但是这个实现有个严重的问题，类的成员变量没有继承下来。看下面一个测试：
+
+BaseClass = class("BaseClass", nil)
+
+function BaseClass:ctor(param)
+     print("baseclass ctor")
+     self._param = param
+     self._children = {}
+end
+
+function BaseClass:addChild(obj)
+     table.insert(self._children, obj)
+end
+
+DerivedClass = class("DerivedClass", BaseClass)
+
+function DerivedClass:ctor(param)
+     print("derivedclass ctor")
+end
+
+local instance = DerivedClass.new("param1")
+instance:addChild("child1")
+运行这个测试，我们会得到两行输出：
+
+derivedclass ctor
+bad argument #1 to 'insert' (table expected, got nil)
+self._children为什么是nil呢？从输出我们看出子类的实例确实成功调用了父类的addChild方法，但是这个方法调用失败了，因为self._children是nil。再细看我们发现基类的构造函数根本没有调用，我们的self._children = {}是放在基类的构造函数里面的，没有调用基类的构造函数自然self._children是nil了。
+
+好，看来这个class实现不完美，我们做一个修补，在子类的构造里面调用一下父类的构造函数。
+
+function DerivedClass:ctor(param)
+     self.super:ctor(param)
+     print("derivedclass ctor")
+end
+
+再次运行测试，我们得到了三行输出：
+baseclass 
+ctorderivedclass
+ctorclasstest1.lua:32: bad argument #1 to 'insert' (table expected, got nil)
+这回基类的构造函数成功调用了，可为什么self._children依然是nil？
+
+把instance的内容dump出来我们发现调用了基类的构造函数后_children被添加到基类的原型中去了，并没有添加到我们子类的实例中，这样在子类实例的self中去找_children自然是找不到了。
+
+<1>{
+  class = <2>{
+    __cname = "DerivedClass",
+    __index = <table 2>,
+    addChild = <function 1>,
+    ctor = <function 2>,
+    new = <function 3>,
+    super = <3>{
+      __cname = "BaseClass",
+      __index = <table 3>,
+      _children = <4>{},
+      _param = <table 1>,
+      addChild = <function 1>
+      ctor = <function 4>,
+      new = <function 5>
+    }
+  },
+  <metatable> = <table 2>
+}
+
+基类的原型中根本不应该有成员变量，所以我们这个修补并不是我们想要的。当然我们这样改就没有问题了：
+function DerivedClass:ctor(param)
+     self._children = {}
+     print("derivedclass ctor")
+end
+
+可是如果在基类中定义好的成员在子类中还要定义一遍，这可不是我们想要的面向对象啊。看来cocos2dx的lua class 实现是有问题的。
+
+修正：上面方法的类定义部分其实没有问题，但是实例化部分粗糙了。调用基类的构造函数时所使用的self指的是基类的原型table，而我们希望的是指向实例table，原型只需要提供方法，不需实例化成员变量，于是我们想到了做如下修改。
+
+function class(classname, super)
+     local cls = {}
+     if super then
+        cls = {}
+        for k,v in pairs(super) do cls[k] = v end
+        cls.super = super
+    else
+        cls = {ctor = function() end}
+    end
+
+    cls.__cname = classname
+    cls.__index = cls
+
+    function cls.new(...)
+        local instance = setmetatable({}, cls)
+        local create
+        create = function(c, ...)
+             if c.super then -- 递归向上调用create
+                  create(c.super, ...)
+             end
+             if c.ctor then
+                  c.ctor(instance, ...)
+             end
+        end
+        create(instance, ...)
+        instance.class = cls
+        return instance
+    end
+    return cls
+end
+再运行测试，我们得到了正确的结果。打印出子类实例的结构，我们看到_children现在是实例table的成员变量了：
+
+<1>{
+  _children = <2>{ "child1" },
+  _param = "param1",
+  class = <3>{
+    __cname = "DerivedClass",
+    __index = <table 3>,
+    addChild = <function 1>,
+    ctor = <function 2>,
+    new = <function 3>,
+    super = <4>{
+      __cname = "BaseClass",
+      __index = <table 4>,
+      addChild = <function 1>,
+      ctor = <function 4>,
+      new = <function 5>
+    }
+  },
+  <metatable> = <table 3>
+}
+
+
+
+

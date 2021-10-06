@@ -1,0 +1,14 @@
+lua的语言的本质就是一切皆table。
+
+所有的基本操作，包括数组(array)，元表(metatable)，模块(module)，都是基于lua的一切皆table这一思想。
+
+一切皆table的意思就是，lua的所有的数据结构就只有table一种结构，该结构就是key，value模式。
+
+array即为key为1,2,3,4的table。
+元表的本质就是改变table的一些基本key，例如__index。
+
+也正因为一切皆table，因此修改某些原有的方式将会非常简单。例如一个简单的优化就是把print改成带trace的log。就是直接把元方法tostring增加一个trace即可。
+
+
+
+
