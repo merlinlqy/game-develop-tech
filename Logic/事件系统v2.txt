@@ -1,0 +1,321 @@
+今天，开始写新的一年的博客了，我的博客更新的比较随意，也比较缓慢，哈哈。前段时间一直在看一些D3D11的博客，自己也在摸索各个API的使用，不过今天要写的是一篇游戏中的事件系统的设计，具体的事件系统的设计模式（观察者模式），我就不再赘述了，网上有很多相关资料，可以自行查阅学习了解一下相关的原理，比较简单易懂。
+
+　　在游戏开发中，我们经常会和服务器进行信息的交互，比如玩家点击了商城里面的领取奖励的按钮，此时客户端会发送一个领取的协议给服务器，服务器校验通过后，会下发给客户端，客户端在收到消息后，会重新刷新一下相关的数据，那么这些数据的刷新怎么表现在UI上面呢，就需要我们通过事件系统来通知UI层进行相关的刷新操作了。
+
+　　最常见的事件系统，就是我上面说到的，将数据层和UI层进行分离，通过事件系统的调用来实现耦合的拆分。这在游戏中有较多的应用，那么，我们今天先说一下这种事件系统的设计模式吧。
+
+一、常见事件系统的设计
+
+　　要设计一个事件系统，一般会暴露最常见的三个接口：Add/Remove/Trigger，分别负责事件的添加，移除和触发。依然用Lua来实现这样的一个接口，我们可以用几个table来实现一个基本的事件系统的三个接口：
+
+复制代码
+local events = {}
+local eventHandleId = 0
+local eventHandles = {}
+--设置两个内部函数操作增加和删除
+local function AddListener(name, listener)
+    local listeners = events[name]
+    if not listeners then
+        listeners = {}
+        events[name] = listeners
+    end
+
+    local handleId = listeners[listener]
+    if not handleId then
+        handleId = eventHandleId + 1
+        eventHandleId = handleId
+        --此处插入，用function来用作key值
+        listeners[listener] = handleId
+        eventHandles[handleId] = { name, listener }
+    end
+
+    return handleId
+end
+
+local function RemoveListener(name, listener, handles)
+    local listeners = events[name]
+    if listeners then
+        if not listener then
+            --该name下对应的所有都清空
+            for _, handleId in pairs(listeners) do
+                eventHandles[handleId] = nil
+                if handles then
+                 handles[handleId] = nil
+                end
+            end
+            events[name] = nil
+        else
+            --特定对应的某个listner删除
+            local handleId = listeners[listener]
+            if handleId then
+                listeners[listener] = nil
+                eventHandles[handleId] = nil
+                if handles then
+                    handles[handleId] = nil
+                end
+            end
+        end
+    end
+end
+--指定删除某个handleId对应的事件
+local function RemoveHandle(handleId)
+    local entry = eventHandles[handleId]
+    if entry then
+        RemoveListener(entry[1], entry[2])
+    end
+end
+
+-- 
+local EventManager = {}
+--增加
+function EventManager.Add(name, listener)
+    AddListener(name, listener)
+end
+--删除
+function EventManager.Remove(name, listener)
+    RemoveListener(name, listener)
+end
+--清空
+function EventManager.Clear()
+    events = {}
+    eventHandles = {}
+end
+--触发
+function EventManager.Dispatch(name, ...)
+    local listeners = events[name]
+    if listeners then
+        for listener, _ in pairs(listeners) do
+            --基于key值（实质为函数）来执行触发操作
+            listener(name, ...)
+        end
+    end
+end
+复制代码
+　　巧用lua中的table，我们可以实现一个最基本的事件系统，具体的原理可以参看lua代码来理解，不是很难。这是最基本的事件系统设计，在此基础上，我们可以进一步的优化我们的事件系统。我们在进行事件系统的注册、删除和触发的时候，并没有考虑到并发性。比如同时有多个消息过来，要求我们对同一个事件进行处理，这时候事件系统就需要考虑并发性的设计了。
+
+二、处理并发性的事件系统设计
+
+    对于并发性的处理，许多常见的思路都给出了不同的处理办法，比如加锁就是一个比较好的处理办法。在执行触发的操作的时候，这是就对添加的函数进行滞后处理，这样可以避免在执行触发操作的时候，又塞入一个新的监听，造成触发隐藏问题。可以这样处理：
+
+复制代码
+local events = {}
+local eventHandleId = 0
+local eventHandles = {}
+
+local function AddListener(name, listener)
+    local listeners = events[name]
+    if not listeners then
+        --listeners不再是一个简单的table，通过多个标识符来标识
+        listeners = { insert = {}, dirty = false, executing = false, destroyed = false }
+        events[name] = listeners
+    end
+
+    local handleId = listeners[listener] or listeners.insert[listener]
+    if not handleId then
+        handleId = eventHandleId + 1
+        eventHandleId = handleId
+        --如果在塞入的时候，该listeners正在被触发，则不执行立即塞入的操作，等下一个触发到来的时候执行
+        if listeners.executing then
+            listeners.insert[listener] = handleId
+            listeners.dirty = true
+        else
+            listeners[listener] = handleId
+        end
+        eventHandles[handleId] = { name, listener }
+    end
+
+    return handleId
+end
+
+local function RemoveListener(name, listener, handles)
+    local listeners = events[name]
+    if listeners then
+        if not listener then
+            for _, handleId in pairs(listeners) do
+                eventHandles[handleId] = nil
+                if handles then
+                    handles[handleId] = nil
+                end
+            end
+            --标记其已经destroyed
+            listeners.destroyed = true
+            events[name] = nil
+        else
+            local handleId = listeners[listener] or listeners.insert[listener]
+            if handleId then
+                listeners[listener] = nil
+                listeners.insert[listener] = nil
+                eventHandles[handleId] = nil
+                if handles then
+                    handles[handleId] = nil
+                end
+            end
+        end
+    end
+end
+
+local function RemoveHandle(handleId)
+    local entry = eventHandles[handleId]
+    if entry then
+        RemoveListener(entry[1], entry[2])
+    end
+end
+
+local EventManager = {}
+
+function EventManager.Add(name, listener)
+    AddListener(name, listener)
+end
+
+function EventManager.Remove(name, listener)
+    RemoveListener(name, listener)
+end
+
+function EventManager.Clear()
+    events = {}
+    eventHandles = {}
+end
+
+function EventManager.Dispatch(name, ...)
+    local listeners = events[name]
+    if listeners then
+        listeners.executing = true
+        for listener, _ in pairs(listeners) do
+            if type(listener) == "function" then
+                listener(name, ...)
+            end
+            --可能在执行listener的过程中回调执行了remove，所以需要检测一次是否退出
+            if listeners.destroyed then
+                return
+            end
+        end
+        --触发完后，再执行缓存的塞入检测
+        if listeners.dirty then
+            for listener, handleId in pairs(listeners.insert) do
+                listeners[listener] = handleId
+                listeners.insert[listener] = nil
+            end
+            listeners.dirty = false
+        end
+        listeners.executing = false
+    end
+end
+复制代码
+ 　　如果不用lua，改用c#来实现，则需要巧妙的运用c#中的链表来实现对应的操作，这儿我也给出一份c#链表的相关实现吧：）
+
+复制代码
+using System;
+using System.Collections.Generic;
+
+public class EventListener
+{
+    public string    name;
+    public Delegate  action;
+}
+
+public static class EventManger
+{
+    private static Dictionary<string, List<EventListener>> listenList = new Dictionary<string, List<EventListener>>();
+    private static Dictionary<string, int> listenerStatus = new Dictionary<string, int>();
+    private static Dictionary<string, List<EventListener>> addList = new Dictionary<string, List<EventListener>>();
+    private static Dictionary<string, List<EventListener>> removeList = new Dictionary<string, List<EventListener>>();
+
+    //查找监听
+    public static EventListener GetListener(string name, Delegate action)
+    {
+        if (action == null) return null;
+        List<EventListener> listEvent = null;
+        if (!listenList.TryGetValue(name, out listEvent) || listEvent.Count < 1)
+            return null;
+        var ls = listEvent.Find(l => l.action.Method == action.Method);
+        return ls;
+    }
+
+    //添加事件监听
+    public static EventListener AddEventListener(string name, Delegate action)
+    {
+        if (action == null) return null;
+        //判断是否已经有
+        var listener = GetListener(name, action);
+        if (listener != null)
+            return listener;
+        //new 可以用资源池代替
+        listener = new EventListener();
+        listener.name = name;
+        listener.action = action;
+        //第一次创建，则建立对应的dic
+        if(!listenList.ContainsKey(name))
+        {
+            listenList.Add(name, new List<EventListener>());
+            addList.Add(name, new List<EventListener>());
+            removeList.Add(name, new List<EventListener>());
+            listenerStatus.Add(name, 0);
+        }
+        //处于事件触发，则滞后处理
+        if (listenerStatus[name] > 0)
+            addList[name].Add(listener);
+        else
+            listenList[name].Add(listener);
+
+        return listener;
+    }
+
+    //删除事件监听
+    public static void RemoveListener(string name, EventListener listener)
+    {
+        List<EventListener> deleteList = null;
+        if(listenList.TryGetValue(name, out deleteList))
+        {
+            //首先删除addList中的监听
+            addList[name].Remove(listener);
+            if(deleteList.Contains(listener))
+            {
+                //如果正在触发，则滞后
+                if (listenerStatus[name] > 0)
+                    removeList[name].Add(listener);
+                else
+                {
+                    deleteList.Remove(listener);
+                    //归还到资源池去........
+                }
+            }
+        }
+    }
+
+    //事件触发
+    public static void DispatchEvent(string name)
+    {
+        //...............
+        List<EventListener> ls = null;
+        if(listenList.TryGetValue(name, out ls))
+        {
+            //标记正在触发
+            listenerStatus[name]++;
+            //
+            foreach(var listener in ls)
+            {
+                listener.action.DynamicInvoke(null);
+            }
+
+            var count = listenerStatus[name] - 1;
+            listenerStatus[name] = count;
+            //此时执行滞后的增删操作
+            if(count < 1)
+            {
+                var list = addList[name];
+                ls.AddRange(list);
+                list.Clear();
+                list = removeList[name];
+                foreach (var listener in list)
+                    ls.Remove(listener);
+                list.Clear();
+            }
+            //.......
+        }
+    }
+
+
+
+}
+复制代码
+　　用listenerStatus来标志是否处于事件触发的状态， 可以较为巧妙的避开同时对链表的操作，当然实际的应用在还会添加一些限定条件，判定条件，避免某些不符合常规的操作带来的风险，具体需要结合项目来进行相关的实现即可。好了，今天的文章就写到这儿，后续再继续更新 :D

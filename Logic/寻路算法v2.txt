@@ -1,0 +1,114 @@
+今天给大家带来一篇游戏中寻路算法的博客。去年，我加入一款RTS的游戏项目，负责开发其中的战斗系统，战斗系统的相关知识，属于游戏中比较繁杂的部分。今天就说说其中的寻路的实现思想，当然，由于牵涉工作保密，我不会贴出核心代码，那么就用简单的意向代码表达核心思想即可：D
+
+　　博客写的慢，马上又要国庆了，下一篇等我国庆放完假再回来更新吧~
+
+一、游戏中的常用寻路算法
+
+　　说到寻路算法，很多人的第一反应就是A*算法，是的，这是正常的反应，而且A*已经在一些游戏中论证了其实用性。无论是基本的A*算法还是后期基于A*的优化算法，以及延伸出来的变异算法，比如B*、JPS算法等，都对游戏的寻路算法做到了极大的推动作用。下面我会给出一个基本优化版本的A*算法原理及初步代码。
+
+　　在一般的单机游戏中，或者ARPG，亦或是优化比较好的MMORPG游戏中，基于A*优化的寻路都可以满足基本的寻路要求。但是在多人RTS游戏中，如果同屏几十上百个玩家，每个玩家进行一次寻路，就会消耗10-20ms左右，那么累积下来的时间损耗就会很大。而我做的RTS游戏又是一款帧同步的游戏，如果我们锁定帧数为30/s，那么游戏中的对象每帧的更新频率在33ms左右，如果分出10-20ms用于寻路，那么，只能看游戏对象寻路了，其他的战斗系统都运行不起来了：D
+
+　　基于这样的考虑，只有Pass通用的A*算法，我们采用的是Unity3D的游戏引擎，那么，自然就会考虑下一个对象：Unity中自带的Navigation寻路。这确实是一个比较优秀的寻路组件，unity内部封装的组件，而且做了一系列的优化，执行的效率比较高。具体的Navigation介绍，可以参考这篇文章：unity navigation社区index/,， 这儿，我就不过多的深入讨论这个寻路组件了。由于我们采用的是帧同步的同步机制，对于每个游戏对象的计算都是在各个客户端计算，为了确保计算结果的一致，需要确保各自的寻路计算是一致的。如果采用navigation，那么不一定能确保在不同的机型下计算得到的寻路节点一致，如果出现寻路节点不一致，就会在不同的机型上出现同一个游戏对象不同的寻路行为，从而引发一系列的不同步，最终这局游戏被判定为作弊Orz
+
+　　文章说到这儿，也许有的同仁会给出其他的寻路解决办法，可以留言在下面，一起学习。
+
+　　接着说，这时候否定了Unity自带的navigation组件，感觉思维似乎走到一个节点了。如果深入的优化A*，最终效果也似乎在10ms左右，不能稳定的符合游戏的设计。这时候，偶然发现一个论坛，其中讨论了《军团要塞》这款游戏的寻路。军团要塞游戏中，也是类似的RTS游戏，会出现同屏几十上百个战斗单位，进行寻路和AI操作。其中的寻路算法就是V社自己提出的场寻路算法Flow Field PathFinding。不得不说RTS游戏对于寻路算法的贡献是不可忽略的，针对多人同屏操作的性能优化，其中的重头戏就是寻路的优化。这儿给出查阅到的场寻路算法的链接：flow-field-pathfinding/
+
+　　在这篇文章中，大概讲述了场寻路算法的思想，当然我没有逐字细看，不过其基本思想大概了解，基于此，我进一步查找了相关的算法，找到国外的一个RTS论坛，得到一些启发：如何开启一款RTS游戏， 在其中提到了Flow Field算法，并给出一定的实现代码。虽然并不是完全的代码，而且由于和AI控制中的steeringBehaviour混合在一起，初期还有一定的迷惑性，后来我结合项目的基本节点刷新，利用其中提到的Dijkstra算法的进一步优化，总算推导出文章中所提到的寻路思想。
+
+二、两种寻路算法的基本原理和实现代码
+
+　　1、A*算法及其优化
+
+ 　　这儿说的A*算法，是针对格子类型的地图的寻路算法，现在有很多讲解A*算法的文章，可以参考很多的文章，其核心的思想是对两张列表的操作，开放表openset和关闭表closeset，用一个列表pathSet作为路径点列表。其基本的函数： F = G + H， 这儿就不再赘述，可以查看相关的算法讲解。
+
+　　这儿，我就用大概的思维代码来列举A*的基本过程吧：
+
+        1） 设置初始点 startPoint， 目标点endPoint，地图相关的数据：宽度width，高度height，地图对应的各个格子的阻挡与否数据mapData；
+
+        2） 首先将初始点塞入开放表openset，计算其F，如果对计算不做优化，H可以用哈曼计算，计算其直线距离即可；
+
+        3） 做一个循环判断，判断条件是openset表中元素个数为0，此时跳出判断；
+
+        4） 进入循环判断，取出openset表的第一个元素current，判断其是否为重点，如果是，则寻路完成，对路径表pathset进行操作，得到最后的路径链表；
+
+        5） 将该点从openset表移除，塞入到closeset中，更改相关标记；
+
+        6） 以current为中心，寻找周边8个方向（具体方向上下左右及四个对角方向），在取点的时候做一个可行走判断，只塞入可行走的区域点，得到neighborPoints;
+
+        7）对neighborPoints点进行逐个计算和判断，首先，不在closeset表中，然后计算当前标准点current到当前节点neighbor代价F1，如果小于当前节点neighbor的代价，则设置为新的路径点，进行下一个操作8)
+
+        8）在该操作中，对于当前节点neighbor，首先将当前标准点current，然后更新当前节点neighbor的消耗为F1，更新其消耗F为F1+H(neighbor，endPoint), 接着进行下一步操作9）
+
+        9）在这步操作中，主要是当前节点neighbor塞入到openSet中，然后即可进行一次堆排序，当然是最小堆排序，这样保证openSet的第一个元素永远是消耗最小的节点。返回到步骤7）中
+
+        10）步骤7的neighborPoints都遍历完后，返回到步骤4）
+
+        最后，要么我们找到了到目标点的路径，要么没有路径点，这就是整个A*的算法过程，其中的优化一个是采用数据结构的方式，动态设置每个节点在openSet还是closeSet，一个是采用堆排序的方法保持openSet的第一个元素一定为消耗最小的临近点。
+
+　　下面我就再次用我的灵魂写法，写一个基本的代码思路吧， 哈哈：
+
+复制代码
+A* F = G + H
+
+1. startPoint/endPoint/width/height/mapData 初始化
+2. openset/closedset/pathSet 初始化
+3. startPoint->openset 
+4. while openset.length > 0  基本循环
+5.    current = openset[1]   取首节点
+6.    if current == endPoint then 判断
+7.        find the path and get the key points from pathSet and return the key points 获取节点
+8.    insert the current into closedset and change it's state
+9.    get the neighborNodes based on the current
+10.   foreach neighbor in neighborNodes 判断
+11.        如果当前neighbor在closeset中，则continue
+12.        如果当前neighbor在openset中，则更新其G，如果比以前的大则不处理，比以前的小，则设置其父节点为currentnode
+13.        如果当前neighbor不在openset中，则计算其G，并添加到openset中，添加的时候触发一次最小堆排序 
+14. if the openset.length <0 and get none the key points to endPoint, return fail
+复制代码
+ 
+
+　　  基本的思路就是这样，网上也有很多成熟的代码，可以搜索后参考实现即可。
+
+        2、Flow Field PathFinding算法原理及其实现
+
+　　说到Flow Field PathFinding算法，就需要补充说一下Dijkstra算法。基于A*算法，在搜寻节点的时候，是不需要遍历所有的节点的，只需要能够在openset中找到目标点，那么这次寻路就算结束。Dijkstra算法，实现的思路是对所有的节点都执行一次寻路消耗计算，最终得到所有地图上可达点到目标点的消耗。基于这样的消耗值，我们可以进一步的绘制一张各个点到目标点的路径的矢量图，这样进一步就可以得到我们需要的各个点到目标点的矢量路线。整体的算法思想，就是这样，接下来可以用简易代码来表现Dijkstra算法的过程，基于这样的过程，不难推导出后续的矢量图绘制和寻路操作。
+
+       1、设置两张表openset和closeset，将目标点goal塞入；
+
+       2、从openset中取出第一个元素，寻找8个方向的相邻点；
+
+       3、对寻找出来的8个临近点，如果其不在closeset中，则计算更新其消耗，然后塞入到openset中
+
+       4、重复2、3步，最后更新得到的路径点，其中的距离就是从当前点到目标点需要多少步的值。（这儿的步，是八个方向的，分为上下左右和四个斜方向）
+
+       5、基于第四步得到的新的路径点数据，可以进一步的生成一张矢量图。矢量，顾名思义，就是一个点指向另一个点的操作。
+
+      还是用代码写过程吧，感觉还是习惯了写我的灵魂代码：D
+
+复制代码
+1、地图生成
+    openset/closeset初始化
+    while openset.length > 0 
+        get the first node of openset and remove from openset and insert into closeset
+        get the eight neighbor node of the current node
+        search all the neighborNodes 
+            if not in closeset
+                get the cur distance of the node
+                if the distance is original or bigger than the current distance + 1
+                    update the distance to the current node distance + 1 
+                insert the node into the openset
+
+    over the search and get the map that all the valid node has newly distance to the goal
+    
+    based on the map, create the vector map of all the node
+
+2、路径生成
+    get the node position of the start point from the vector map
+    get the minimum point of the node
+    repeat until get the goal point
+    revert the finding process, get the path!
+复制代码
+　　经过数据的分析对比，整个场寻路的时间消耗，主要在最初的Dijkstra算法生成地图的过程，这个过程会随着地图的变大而变长，当然，这个过程可以在前期的游戏加载中就进行，这样的时间嵌入到加载时间中，显得影响不大。那么基于生成的矢量图寻路的过程，是极其迅速的，测量了100*100的地图，寻路的过程不到1ms，基本可以忽略不计，这样快速高效的寻路算法，简直对于特定场合的寻路应用是极其诱惑的。
+
+       有利也有弊，场寻路算法带来极其快捷的寻路，其对应的限制就是矢量图一次生成后，不能再次修改，如果需要重新设置目标点，那么需要重新生成一张新的矢量图。在大量单位模拟同类操作的过程中，可以用这样的寻路算法来解决大量单位带来的寻路消耗。在对玩家自由操作寻路的游戏类型中，显然不如A*或者JPS等寻路算法。所以，具体的寻路算法，是需要结合实际的游戏应用场景来实现的，只有最优最合适的算法：D

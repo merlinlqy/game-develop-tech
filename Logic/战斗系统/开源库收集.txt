@@ -1,0 +1,5 @@
+游戏技能系统框架 https://github.com/dongweiPeng/SkillSystem
+一个MMORPG的常规技能系统 https://zhuanlan.zhihu.com/p/26077188
+一个MOBA游戏的常规技能系统 https://zhuanlan.zhihu.com/p/26104183
+EGamePlay https://github.com/m969/EGamePlay
+
