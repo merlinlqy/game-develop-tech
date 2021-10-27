@@ -1,0 +1,23 @@
+工厂模式的一个简单应用就是，对于多种不同的service，根据不同的平台去创建。
+例如PlatformManager，PlatformManager的初始化函数那里，根据不同的平台，创建对应的service：
+if (platform == "android")
+   AndroidService.create()
+else if (platform == "ios")
+   IosService.create()
+
+各个service都继承于Service超类。
+
+
+这种方式不好的地方是，这个PlatformManager会很复杂。
+
+有一种实现方式是，PlatformManager的实现从这种判断方式变成注册加查表的方式。
+在每个service的初始化那里（或者PlatformManager的初始化那里），进行注册：
+container.Register("android", AndroidService)
+container.Register("ios", IosService)
+
+注册完以后，当在使用的时候，就直接有一个反射或者泛型即可：
+service.Get<T>()
+
+这样整个PlatformManager将会容易查看。并且这些Service都是平行状态，更容易去维护。
+
+
